@@ -1,0 +1,136 @@
+---
+title: "Week 1 — Foundations of Biomedical Informatics (R)"
+subtitle: "Block 1, Essentials of Biomedical Informatics"
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+## Learning objectives
+
+By the end of this document you will be able to:
+
+- Load a tabular health dataset into R and inspect its structure
+- Distinguish data types commonly found in health data (demographic, clinical, categorical)
+- Produce descriptive summary statistics for a health dataset
+- Create a simple visualization of a health variable
+- Render this document to a shareable HTML report
+
+## How this document is organized
+
+1. **Walkthrough** — a fully worked example using a small synthetic patient dataset. Read through, run every chunk, and make sure you understand each step.
+2. **Your Turn** — a short exercise you complete yourself and submit for this week's deliverable.
+
+> This dataset is entirely synthetic (randomly generated) — it does not represent real patients. We use synthetic data throughout the first few weeks so you can practice safely before we introduce real standardized data structures (the OMOP Common Data Model) in Week 2.
+
+## Part 1 — Walkthrough
+
+### Step 1: Load packages
+
+We'll use the `tidyverse` (specifically `dplyr` for data manipulation and `ggplot2` for plotting) — both free, open-source packages. If you haven't installed them yet: `install.packages("tidyverse")`.
+
+```{r}
+#| message: false
+library(dplyr)
+library(ggplot2)
+
+set.seed(42)  # ensures everyone generates the same synthetic dataset
+```
+
+### Step 2: Create a small synthetic patient dataset
+
+Real electronic health record (EHR) data is rarely handed to you as one tidy table — but almost every health dataset you will ever work with contains some version of these columns: an identifier, demographics, a few clinical measurements, and a diagnosis or outcome. This mirrors (in miniature) what you'll see in the OMOP `Person` and `Condition_Occurrence` tables next week.
+
+```{r}
+n <- 200
+
+df <- data.frame(
+  patient_id = sprintf("P%04d", 1:n),
+  age = sample(18:89, n, replace = TRUE),
+  sex = sample(c("Female", "Male"), n, replace = TRUE),
+  bmi = round(rnorm(n, mean = 27, sd = 5), 1),
+  systolic_bp = sample(95:179, n, replace = TRUE),
+  smoker = sample(c("Yes", "No"), n, replace = TRUE, prob = c(0.2, 0.8)),
+  diagnosis = sample(
+    c("Type 2 Diabetes", "Hypertension", "Healthy", "Asthma"),
+    n, replace = TRUE, prob = c(0.25, 0.30, 0.30, 0.15)
+  )
+)
+
+head(df)
+```
+
+### Step 3: Inspect the data
+
+Before computing anything, always look at the shape of the data and the type of each column.
+
+```{r}
+dim(df)
+str(df)
+```
+
+### Step 4: Descriptive statistics
+
+`summary()` gives you min/max/quartiles for numeric columns and counts for character/factor columns.
+
+```{r}
+summary(df)
+```
+
+### Step 5: Group comparisons
+
+A common first question in health data: *does this measurement differ across groups?* Here we compare average BMI across diagnosis categories.
+
+```{r}
+df |>
+  group_by(diagnosis) |>
+  summarise(
+    mean_bmi = round(mean(bmi), 1),
+    sd_bmi   = round(sd(bmi), 1),
+    n        = n()
+  )
+```
+
+*(Note: this uses R's native pipe `|>`, available in R 4.1+. If your R version is older, use `%>%` from `magrittr`/`dplyr` instead — the logic is identical.)*
+
+### Step 6: A simple visualization
+
+A histogram of age, and a boxplot of BMI by diagnosis.
+
+```{r}
+ggplot(df, aes(x = age)) +
+  geom_histogram(bins = 15, fill = "#2E6DA4", color = "white") +
+  labs(title = "Age distribution", x = "Age", y = "Count") +
+  theme_minimal()
+```
+
+```{r}
+ggplot(df, aes(x = diagnosis, y = bmi)) +
+  geom_boxplot(fill = "#D5E8F0") +
+  labs(title = "BMI by diagnosis", x = "Diagnosis", y = "BMI") +
+  theme_minimal()
+```
+
+## Part 2 — Your Turn (this week's deliverable)
+
+Using the same `df` (or generating your own synthetic dataset with a different seed), complete the following:
+
+1. Compute descriptive statistics for **systolic_bp**, split by `smoker` status (Yes/No). *Hint: adapt the `group_by()`/`summarise()` pattern from Step 5.*
+2. Create **one visualization** showing how `systolic_bp` differs by `smoker` status (a boxplot or histogram both work).
+3. In a short paragraph below your code, write 2–3 sentences interpreting what you see. Is this a real clinical finding? Why or why not? *(Hint: think about how this dataset was generated in Step 2.)*
+4. Render this document to HTML (click **Render** in RStudio, or run `quarto render Week1_Foundations_R.qmd` from the terminal) and submit the rendered `.html` file plus this `.qmd` file via the Brightspace dropbox for Week 1.
+
+```{r}
+# Task 1: descriptive statistics of systolic_bp by smoker status
+
+```
+
+```{r}
+# Task 2: visualization
+
+```
+
+**Task 3 — your interpretation:**
+
+*(write your 2–3 sentences here)*

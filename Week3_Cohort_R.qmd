@@ -1,0 +1,110 @@
+---
+title: "Week 3 — SQL for Health Data: Connecting from R"
+subtitle: "Block 1, Essentials of Biomedical Informatics"
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+This week's SQL work lives in `Week3_Cohort_Query.sql` — start there. This document shows the other half of the picture: how to run that same SQL *from R* and pull the result straight into a data frame using `DBI`, so you can move seamlessly from database to analysis.
+
+## Learning objectives
+
+- Connect to a DuckDB database from R using `DBI`
+- Run a SQL query and load the result into a data frame
+- Understand why "push the filtering into SQL, then analyze in R" is usually faster than pulling raw tables and filtering with dplyr
+
+## Part 1 — Walkthrough
+
+### Step 1: Connect to the database
+
+Install the required packages once: `install.packages(c("DBI", "duckdb", "dplyr"))`.
+
+```{r}
+#| message: false
+library(DBI)
+library(duckdb)
+library(dplyr)
+
+con <- dbConnect(duckdb(), dbdir = "synthetic_omop.duckdb", read_only = TRUE)
+dbListTables(con)
+```
+
+### Step 2: Run the cohort query from Week 3's SQL file
+
+This is the exact same CTE + window function query from `Week3_Cohort_Query.sql`, Step 3 — just executed from R instead of a SQL client.
+
+```{r}
+query <- "
+WITH t2d_dx AS (
+    SELECT person_id, condition_start_date AS diagnosis_date
+    FROM condition_occurrence
+    WHERE condition_concept_id = 101
+),
+metformin_ranked AS (
+    SELECT
+        person_id,
+        drug_exposure_start_date,
+        ROW_NUMBER() OVER (PARTITION BY person_id ORDER BY drug_exposure_start_date) AS rn
+    FROM drug_exposure
+    WHERE drug_concept_id = 201
+),
+first_metformin AS (
+    SELECT person_id, drug_exposure_start_date AS metformin_start
+    FROM metformin_ranked
+    WHERE rn = 1
+)
+SELECT
+    p.person_id,
+    g.concept_name AS sex,
+    t.diagnosis_date,
+    f.metformin_start,
+    FLOOR((t.diagnosis_date - CAST((p.year_of_birth || '-01-01') AS DATE)) / 365.25) AS age_at_diagnosis
+FROM t2d_dx t
+JOIN first_metformin f ON f.person_id = t.person_id
+JOIN person p ON p.person_id = t.person_id
+LEFT JOIN concept g ON p.gender_concept_id = g.concept_id
+WHERE f.metformin_start BETWEEN t.diagnosis_date AND t.diagnosis_date + INTERVAL 90 DAY
+"
+
+cohort <- dbGetQuery(con, query)
+head(cohort)
+```
+
+### Step 3: Now that it's a data frame, analyze it like any other
+
+```{r}
+cohort |>
+  group_by(sex) |>
+  summarise(
+    mean_age = round(mean(age_at_diagnosis), 1),
+    n = n()
+  )
+```
+
+### Why filter in SQL instead of dplyr?
+
+You could have pulled the entire `condition_occurrence`, `drug_exposure`, and `person` tables into R and done the joins/filtering with dplyr. On this tiny teaching database it wouldn't matter. On a real OMOP database with hundreds of millions of rows, pulling everything into memory first is often impossible — the database engine is built to do joins and filters efficiently on disk. **General rule: push filtering and joining into SQL; bring back only the rows and columns you actually need.** (This is exactly what the `dbplyr` package automates if you'd rather write dplyr syntax that gets translated to SQL behind the scenes — worth exploring once you're comfortable with raw SQL.)
+
+## Part 2 — Your Turn (this week's deliverable)
+
+1. Adapt the query above to instead build the **hypertension → lisinopril within 180 days** cohort from `Week3_Cohort_Query.sql`'s Task 1/2 (`condition_concept_id = 102`, `drug_concept_id = 202`, 180-day window).
+2. Load it into a data frame and report the mean age at diagnosis by sex, as in Step 3.
+3. Export your cohort to a CSV file called `week3_cohort_hypertension.csv` using `write.csv()`.
+4. Render this document and submit both the `.qmd` and rendered `.html` file via the Week 3 dropbox.
+
+```{r}
+# Task 1 & 2: adapt the query for the hypertension/lisinopril cohort
+
+```
+
+```{r}
+# Task 3: export to CSV
+
+```
+
+```{r}
+#| include: false
+dbDisconnect(con, shutdown = TRUE)
+```

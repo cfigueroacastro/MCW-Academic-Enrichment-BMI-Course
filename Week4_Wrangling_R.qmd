@@ -1,0 +1,165 @@
+---
+title: "Week 4 — Data Wrangling and Exploratory Analysis (R)"
+subtitle: "Block 1, Essentials of Biomedical Informatics"
+format:
+  html:
+    toc: true
+    embed-resources: true
+---
+
+This week we take the Type 2 Diabetes + metformin cohort from Week 3 and do what almost every real analysis needs next: join in a clinical measurement, clean it, characterize the cohort (a "Table 1"), and visualize a trend over time — while explicitly handling missing data along the way.
+
+## Learning objectives
+
+- Join a cohort definition to a measurement table and reshape the result for analysis
+- Identify and appropriately handle missing values in a health dataset
+- Build a simple "Table 1" cohort characterization table
+- Create a clear, labeled visualization of a clinical trend over time (a "spaghetti plot")
+
+## Part 1 — Walkthrough
+
+### Step 1: Rebuild the Week 3 cohort
+
+We reconnect to the same database and re-run the Week 3 cohort query, so this document works standalone even if you're picking it up fresh.
+
+```{r}
+#| message: false
+library(DBI)
+library(duckdb)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+
+con <- dbConnect(duckdb(), dbdir = "synthetic_omop.duckdb", read_only = TRUE)
+
+cohort_query <- "
+WITH t2d_dx AS (
+    SELECT person_id, condition_start_date AS diagnosis_date
+    FROM condition_occurrence WHERE condition_concept_id = 101
+),
+metformin_ranked AS (
+    SELECT person_id, drug_exposure_start_date,
+        ROW_NUMBER() OVER (PARTITION BY person_id ORDER BY drug_exposure_start_date) AS rn
+    FROM drug_exposure WHERE drug_concept_id = 201
+),
+first_metformin AS (
+    SELECT person_id, drug_exposure_start_date AS metformin_start FROM metformin_ranked WHERE rn = 1
+)
+SELECT
+    p.person_id, g.concept_name AS sex, t.diagnosis_date, f.metformin_start,
+    FLOOR((t.diagnosis_date - CAST((p.year_of_birth || '-01-01') AS DATE)) / 365.25) AS age_at_diagnosis
+FROM t2d_dx t
+JOIN first_metformin f ON f.person_id = t.person_id
+JOIN person p ON p.person_id = t.person_id
+LEFT JOIN concept g ON p.gender_concept_id = g.concept_id
+WHERE f.metformin_start BETWEEN t.diagnosis_date AND t.diagnosis_date + INTERVAL 90 DAY
+"
+
+cohort <- dbGetQuery(con, cohort_query)
+nrow(cohort)
+```
+
+### Step 2: Pull in HbA1c measurements and join to the cohort
+
+`measurement_concept_id = 301` is Hemoglobin A1c in our teaching vocabulary (see Week 2).
+
+```{r}
+hba1c <- dbGetQuery(con, "
+    SELECT person_id, measurement_date, value_as_number
+    FROM measurement WHERE measurement_concept_id = 301
+")
+
+df <- hba1c |>
+  inner_join(cohort |> select(person_id, sex, age_at_diagnosis, metformin_start), by = "person_id") |>
+  mutate(days_since_metformin = as.numeric(as.Date(measurement_date) - as.Date(metformin_start)))
+
+head(df)
+```
+
+### Step 3: Look for missing data — don't skip this step
+
+A missing `value_as_number` here represents a real-world scenario: a lab was ordered but the result never made it into the record. **Always check for and explicitly report missingness before you analyze anything** — silently dropping rows without checking can bias your results if missingness isn't random.
+
+```{r}
+n_total <- nrow(df)
+n_missing <- sum(is.na(df$value_as_number))
+cat(sprintf("%d of %d HbA1c readings (%.1f%%) are missing a value.\n", n_missing, n_total, 100 * n_missing / n_total))
+```
+
+For this exercise we'll **drop** rows with a missing value before plotting a trend (you can't plot a point you don't have), but we keep the missingness rate itself as something we report — it's a data quality fact about the cohort, not something to hide.
+
+```{r}
+df_clean <- df |> filter(!is.na(value_as_number))
+nrow(df_clean)
+```
+
+### Step 4: A simple Table 1
+
+A "Table 1" is the standard first table in a clinical research paper: it characterizes who is in your cohort before you show any results about them.
+
+```{r}
+table1 <- tibble(
+  `N patients` = nrow(cohort),
+  `% Female` = round(mean(cohort$sex == "Female") * 100, 1),
+  `Mean age at diagnosis` = round(mean(cohort$age_at_diagnosis), 1),
+  `% HbA1c readings missing` = round(n_missing / n_total * 100, 1)
+)
+table1
+```
+
+### Step 5: Visualize the trend — a "spaghetti plot"
+
+One line per patient, showing how their HbA1c changes relative to when they started metformin. We restrict to a -180 to +730 day window around treatment start; measurements from years before or after aren't relevant to *this* treatment's effect and would just clutter the plot — filtering to the relevant window is itself a wrangling decision worth stating explicitly.
+
+```{r}
+window_df <- df_clean |> filter(days_since_metformin >= -180, days_since_metformin <= 730)
+
+ggplot(window_df, aes(x = days_since_metformin, y = value_as_number, group = person_id)) +
+  geom_line(alpha = 0.25, color = "#2E6DA4") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray40") +
+  labs(
+    title = "HbA1c trajectories, Type 2 Diabetes + metformin cohort",
+    x = "Days since starting metformin", y = "HbA1c (%)"
+  ) +
+  theme_minimal()
+```
+
+## Part 2 — Your Turn (this week's deliverable)
+
+Repeat this pipeline for the **Hypertension + Lisinopril** cohort from Week 3 (`condition_concept_id = 102`, `drug_concept_id = 202`, 180-day window) and **Systolic blood pressure** measurements (`measurement_concept_id = 302`):
+
+1. Rebuild that cohort (adapt Step 1, or reuse your Week 3 query).
+2. Join it to the systolic blood pressure measurements and compute the missingness rate.
+3. Produce a Table 1 for this cohort (same four columns as Step 4, relabeled appropriately).
+4. Produce a spaghetti plot of systolic blood pressure over days since starting lisinopril (adapt Step 5's window as needed — look at your data's actual range first).
+5. In 2-3 sentences, describe what the plot shows and whether the missingness rate would concern you if this were real clinical data.
+6. Render this document and submit both the `.qmd` and rendered `.html` file via the Week 4 dropbox.
+
+```{r}
+# Task 1: rebuild the hypertension/lisinopril cohort
+
+```
+
+```{r}
+# Task 2: join to blood pressure measurements + missingness
+
+```
+
+```{r}
+# Task 3: Table 1
+
+```
+
+```{r}
+# Task 4: spaghetti plot
+
+```
+
+**Task 5 — your interpretation:**
+
+*(write your 2-3 sentences here)*
+
+```{r}
+#| include: false
+dbDisconnect(con, shutdown = TRUE)
+```
